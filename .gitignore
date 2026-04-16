@@ -1,6 +1,7 @@
 hrnet.pth
 vitpose-env/*
 output/*
+my_code/checkpoints/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
