@@ -3,36 +3,31 @@ from torch.utils.data import DataLoader, Subset
 
 from dataset import MMVRRadarPoseDataset
 from model import SimpleRadarPoseCNN
+from evaluate import run_eval, EpochLogger
 
 
 def main():
     root_dir = "../P2_02"
 
-    # Added: use GPU if available, matching train_v2.py behaviour
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    # Load full dataset
+    # Load full dataset, use first 8 samples as a smoke test
     full_dataset = MMVRRadarPoseDataset(root_dir=root_dir)
+    small_dataset = Subset(full_dataset, list(range(3)))
+    loader = DataLoader(full_dataset, batch_size=4, shuffle=True)
 
-    # Sanity-check subset: first 8 samples
-    small_dataset = Subset(full_dataset, list(range(8)))
-
-    loader = DataLoader(small_dataset, batch_size=4, shuffle=True)
-
-    # Added: move model to device
     model = SimpleRadarPoseCNN().to(device)
     criterion = torch.nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     num_epochs = 50
+    logger = EpochLogger()
 
     for epoch in range(num_epochs):
+        # --- Training step ---
         model.train()
-        epoch_loss = 0.0
-
         for batch_radar, batch_keypoints in loader:
-            # Added: move tensors to device
             batch_radar = batch_radar.to(device)
             batch_keypoints = batch_keypoints.to(device)
 
@@ -43,10 +38,15 @@ def main():
             loss.backward()
             optimizer.step()
 
-            epoch_loss += loss.item()
+        # --- Evaluation + logging ---
+        metrics = run_eval(model, loader, criterion, device)
+        logger.log(epoch + 1, metrics)
 
-        avg_loss = epoch_loss / len(loader)
-        print(f"Epoch {epoch+1:03d} | Loss: {avg_loss:.6f}")
+    # Print the per-joint breakdown once at the end
+    logger.print_joint_summary(metrics)
+
+    # Save the 4-panel training plot
+    logger.save_plot("checkpoints_v1/training_curves.png")
 
 
 if __name__ == "__main__":
