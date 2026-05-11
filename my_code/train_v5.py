@@ -13,8 +13,12 @@ import json
 import random
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch_directml
 from torch.utils.data import DataLoader, random_split
 
 from dataset import MMVRRadarPoseDataset
@@ -25,8 +29,7 @@ def set_seeds(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+    pass  # DirectML has no GPU seed API
 
 
 def evaluate(model, loader, criterion, device):
@@ -43,8 +46,8 @@ def evaluate(model, loader, criterion, device):
 
 
 def main() -> None:
-    root_dir = "../P2_02"
-    batch_size = 16
+    root_dir = "../P1"
+    batch_size = 64
     learning_rate = 2e-4     # lower than v3: cross-attention + self-attention layers
     num_epochs = 100         # joint queries take many epochs to specialise
     train_ratio = 0.8
@@ -59,7 +62,7 @@ def main() -> None:
 
     set_seeds(random_seed)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch_directml.device(0) if torch_directml.device_count() > 0 else torch.device("cpu")
     print("Using device:", device)
 
     dataset = MMVRRadarPoseDataset(root_dir=root_dir)
@@ -72,8 +75,8 @@ def main() -> None:
     print("Train samples:", len(train_dataset))
     print("Val samples:  ", len(val_dataset))
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-    val_loader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True, num_workers=4, persistent_workers=True)
+    val_loader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False, num_workers=4, persistent_workers=True)
 
     model = RadarPoseDETR(
         num_keypoints=17,
@@ -113,12 +116,16 @@ def main() -> None:
     epochs_no_improve = 0
     output_dir = Path("checkpoints_v5")
     output_dir.mkdir(exist_ok=True)
+    num_batches = len(train_loader)
+    train_losses: list[float] = []
+    val_losses: list[float] = []
+    lr_history: list[float] = []
 
     for epoch in range(num_epochs):
         model.train()
         train_loss_total = 0.0
 
-        for batch_radar, batch_keypoints in train_loader:
+        for i, (batch_radar, batch_keypoints) in enumerate(train_loader):
             batch_radar = batch_radar.to(device)
             batch_keypoints = batch_keypoints.to(device)
 
@@ -130,6 +137,15 @@ def main() -> None:
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
             train_loss_total += loss.item()
+
+            print(
+                f"  Epoch {epoch+1:03d}/{num_epochs} | "
+                f"Batch {i+1}/{num_batches} | "
+                f"Loss: {loss.item():.6f}",
+                end="\r", flush=True,
+            )
+
+        print()
 
         avg_train_loss = train_loss_total / len(train_loader)
         avg_val_loss = evaluate(model, val_loader, criterion, device)
@@ -144,6 +160,28 @@ def main() -> None:
             f"LR: {current_lr:.2e}"
         )
 
+        train_losses.append(avg_train_loss)
+        val_losses.append(avg_val_loss)
+        lr_history.append(current_lr)
+        _ep = list(range(1, len(train_losses) + 1))
+        fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+        fig.suptitle("Training Curves (v5)", fontsize=13, fontweight="bold")
+        axes[0].plot(_ep, train_losses, label="Train", color="steelblue")
+        axes[0].plot(_ep, val_losses,   label="Val",   color="darkorange")
+        axes[0].set_title("Loss per Epoch")
+        axes[0].set_xlabel("Epoch")
+        axes[0].set_ylabel("Loss")
+        axes[0].legend()
+        axes[0].grid(True, alpha=0.3)
+        axes[1].plot(_ep, lr_history, color="mediumseagreen")
+        axes[1].set_title("Learning Rate (decoder)")
+        axes[1].set_xlabel("Epoch")
+        axes[1].set_ylabel("LR")
+        axes[1].grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "training_curves.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             epochs_no_improve = 0
@@ -152,32 +190,33 @@ def main() -> None:
             print(f"  Saved best model -> {save_path}")
         else:
             epochs_no_improve += 1
-            if epochs_no_improve >= patience:
-                print(f"\nEarly stopping after {patience} epochs without improvement.")
-                break
+
+        config = {
+            "model": "RadarPoseDETR",
+            "root_dir": root_dir,
+            "batch_size": batch_size,
+            "learning_rate": learning_rate,
+            "num_epochs": num_epochs,
+            "train_ratio": train_ratio,
+            "random_seed": random_seed,
+            "patience": patience,
+            "grad_clip": grad_clip,
+            "weight_decay": weight_decay,
+            "d_model": d_model,
+            "nhead": nhead,
+            "num_decoder_layers": num_decoder_layers,
+            "best_val_loss": best_val_loss,
+            "last_epoch": epoch + 1,
+        }
+        with open(output_dir / "config.json", "w") as f:
+            json.dump(config, f, indent=2)
+
+        if epochs_no_improve >= patience:
+            print(f"\nEarly stopping after {patience} epochs without improvement.")
+            break
 
     print("\nTraining complete.")
     print(f"Best validation loss: {best_val_loss:.6f}")
-
-    config = {
-        "model": "RadarPoseDETR",
-        "root_dir": root_dir,
-        "batch_size": batch_size,
-        "learning_rate": learning_rate,
-        "num_epochs": num_epochs,
-        "train_ratio": train_ratio,
-        "random_seed": random_seed,
-        "patience": patience,
-        "grad_clip": grad_clip,
-        "weight_decay": weight_decay,
-        "d_model": d_model,
-        "nhead": nhead,
-        "num_decoder_layers": num_decoder_layers,
-        "best_val_loss": best_val_loss,
-    }
-    with open(output_dir / "config.json", "w") as f:
-        json.dump(config, f, indent=2)
-    print(f"Config saved to {output_dir / 'config.json'}")
 
 
 if __name__ == "__main__":

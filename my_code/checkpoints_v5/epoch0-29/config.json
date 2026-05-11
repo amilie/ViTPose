@@ -1,0 +1,17 @@
+{
+  "model": "RadarPoseDETR",
+  "root_dir": "../P1",
+  "batch_size": 16,
+  "learning_rate": 0.0002,
+  "num_epochs": 100,
+  "train_ratio": 0.8,
+  "random_seed": 42,
+  "patience": 20,
+  "grad_clip": 0.5,
+  "weight_decay": 5e-05,
+  "d_model": 256,
+  "nhead": 8,
+  "num_decoder_layers": 4,
+  "best_val_loss": 0.22963469397080571,
+  "last_epoch": 28
+}

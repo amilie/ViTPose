@@ -1,0 +1,15 @@
+{
+  "model": "RadarPoseHeatmapUNet",
+  "root_dir": "../P1",
+  "batch_size": 8,
+  "learning_rate": 0.0003,
+  "num_epochs": 80,
+  "train_ratio": 0.8,
+  "random_seed": 42,
+  "patience": 12,
+  "grad_clip": 1.0,
+  "weight_decay": 0.0001,
+  "base_ch": 32,
+  "best_val_loss": 0.2496030691229608,
+  "last_epoch": 9
+}

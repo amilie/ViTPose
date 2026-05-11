@@ -32,7 +32,7 @@ def evaluate(model, loader, criterion, device):
 
 
 def main():
-    root_dir = "../P2_02"
+    root_dir = "../P1"
     batch_size = 16          # increased: wider model benefits from larger batches
     learning_rate = 5e-4     # lowered: per-joint heads need finer initial steps
     num_epochs = 60
@@ -84,12 +84,13 @@ def main():
     epochs_no_improve = 0
     output_dir = Path("checkpoints")
     output_dir.mkdir(exist_ok=True)
+    num_batches = len(train_loader)
 
     for epoch in range(num_epochs):
         model.train()
         train_loss_total = 0.0
 
-        for batch_radar, batch_keypoints in train_loader:
+        for i, (batch_radar, batch_keypoints) in enumerate(train_loader):
             batch_radar = batch_radar.to(device)
             batch_keypoints = batch_keypoints.to(device)
 
@@ -101,6 +102,15 @@ def main():
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
             train_loss_total += loss.item()
+
+            print(
+                f"  Epoch {epoch+1:03d}/{num_epochs} | "
+                f"Batch {i+1}/{num_batches} | "
+                f"Loss: {loss.item():.6f}",
+                end="\r", flush=True,
+            )
+
+        print()
 
         avg_train_loss = train_loss_total / len(train_loader)
         avg_val_loss = evaluate(model, val_loader, criterion, device)
@@ -122,29 +132,30 @@ def main():
             print(f"  Saved best model -> {save_path}")
         else:
             epochs_no_improve += 1
-            if epochs_no_improve >= patience:
-                print(f"\nEarly stopping after {patience} epochs without improvement.")
-                break
+
+        config = {
+            "model": "SimpleRadarPoseCNN",
+            "root_dir": root_dir,
+            "batch_size": batch_size,
+            "learning_rate": learning_rate,
+            "num_epochs": num_epochs,
+            "train_ratio": train_ratio,
+            "random_seed": random_seed,
+            "patience": patience,
+            "grad_clip": grad_clip,
+            "weight_decay": weight_decay,
+            "best_val_loss": best_val_loss,
+            "last_epoch": epoch + 1,
+        }
+        with open(output_dir / "config.json", "w") as f:
+            json.dump(config, f, indent=2)
+
+        if epochs_no_improve >= patience:
+            print(f"\nEarly stopping after {patience} epochs without improvement.")
+            break
 
     print("\nTraining complete.")
     print(f"Best validation loss: {best_val_loss:.6f}")
-
-    config = {
-        "model": "SimpleRadarPoseCNN",
-        "root_dir": root_dir,
-        "batch_size": batch_size,
-        "learning_rate": learning_rate,
-        "num_epochs": num_epochs,
-        "train_ratio": train_ratio,
-        "random_seed": random_seed,
-        "patience": patience,
-        "grad_clip": grad_clip,
-        "weight_decay": weight_decay,
-        "best_val_loss": best_val_loss,
-    }
-    with open(output_dir / "config.json", "w") as f:
-        json.dump(config, f, indent=2)
-    print(f"Config saved to {output_dir / 'config.json'}")
 
 
 if __name__ == "__main__":
